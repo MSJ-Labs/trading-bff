@@ -83,7 +83,7 @@ public class SecurityConfig {
         }
         try {
             return InetAddress.getByName(request.getRemoteAddr()).isLoopbackAddress();
-        } catch (UnknownHostException e) {
+        } catch (UnknownHostException _) {
             return false;
         }
     }

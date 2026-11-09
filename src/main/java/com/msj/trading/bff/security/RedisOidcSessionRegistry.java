@@ -49,7 +49,7 @@ public class RedisOidcSessionRegistry implements OidcSessionRegistry {
         if (sid != null) {
             indexes.opsForValue().set(sidKey(issuer, sid), info.getSessionId(), ttl);
         }
-        String subject = Objects.requireNonNull(user.getSubject(), "OIDC subject (sub claim) is missing");
+        String subject = subject(user.getSubject());
         String subKey = subKey(issuer, subject);
         indexes.opsForSet().add(subKey, info.getSessionId());
         indexes.expire(subKey, ttl);
@@ -79,7 +79,7 @@ public class RedisOidcSessionRegistry implements OidcSessionRegistry {
                 sessionIds.add(id);
             }
         } else {
-            String subject = Objects.requireNonNull(token.getSubject(), "OIDC subject (sub claim) is missing");
+            String subject = subject(token.getSubject());
             Set<String> ids = indexes.opsForSet().members(subKey(issuer, subject));
             if (ids != null) {
                 sessionIds.addAll(ids);
@@ -99,13 +99,17 @@ public class RedisOidcSessionRegistry implements OidcSessionRegistry {
         if (sid != null) {
             indexes.delete(sidKey(issuer, sid));
         }
-        String subject = Objects.requireNonNull(user.getSubject(), "OIDC subject (sub claim) is missing");
+        String subject = subject(user.getSubject());
         indexes.opsForSet().remove(subKey(issuer, subject), info.getSessionId());
     }
 
     /** Fails with a readable message instead of an anonymous NPE (a token without iss is invalid anyway). */
     private static String issuer(@Nullable URL issuer) {
         return Objects.requireNonNull(issuer, "OIDC issuer (iss claim) is missing").toString();
+    }
+
+    private static String subject(@Nullable String subject) {
+        return Objects.requireNonNull(subject, "OIDC subject (sub claim) is missing");
     }
 
     private static String sessionKey(String sessionId) {
