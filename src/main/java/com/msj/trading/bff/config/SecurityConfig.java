@@ -1,13 +1,27 @@
 package com.msj.trading.bff.config;
 
+import java.net.InetAddress;
+import java.net.UnknownHostException;
+import java.time.Duration;
+
+import com.msj.trading.bff.security.RedisOidcSessionRegistry;
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.security.autoconfigure.actuate.web.servlet.EndpointRequest;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
+import org.springframework.data.redis.connection.RedisConnectionFactory;
+import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.serializer.JdkSerializationRedisSerializer;
+import org.springframework.data.redis.serializer.StringRedisSerializer;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
-import org.springframework.security.config.annotation.web.configurers.CsrfConfigurer;
+import org.springframework.boot.session.autoconfigure.DefaultCookieSerializerCustomizer;
+import org.springframework.security.config.annotation.web.configurers.oauth2.client.OidcBackChannelLogoutHandler;
+import org.springframework.security.oauth2.client.oidc.session.OidcSessionInformation;
+import org.springframework.security.oauth2.client.oidc.session.OidcSessionRegistry;
 import org.springframework.security.oauth2.client.oidc.web.logout.OidcClientInitiatedLogoutSuccessHandler;
 import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
 import org.springframework.security.web.SecurityFilterChain;
@@ -32,14 +46,65 @@ public class SecurityConfig {
                 .build();
     }
 
+    /**
+     * Shared OIDC session registry (Redis): maps Keycloak's sid/sub to the BFF HTTP session. The
+     * default in-memory one would only work on a single pod. TTL = HTTP session timeout.
+     */
+    @Bean
+    OidcSessionRegistry oidcSessionRegistry(RedisConnectionFactory connectionFactory,
+                                            StringRedisTemplate stringRedisTemplate,
+                                            @Value("${spring.session.timeout}") Duration sessionTimeout) {
+        var template = new RedisTemplate<String, OidcSessionInformation>();
+        template.setConnectionFactory(connectionFactory);
+        template.setKeySerializer(new StringRedisSerializer());
+        template.setValueSerializer(new JdkSerializationRedisSerializer(getClass().getClassLoader()));
+        template.afterPropertiesSet();
+        return new RedisOidcSessionRegistry(template, stringRedisTemplate, sessionTimeout);
+    }
+
+    /**
+     * Raw session id in the SESSION cookie (no Base64): the back-channel handler puts the raw id in the
+     * cookie it sends to /logout, and Spring Session would Base64-decode it into a wrong id.
+     */
+    @Bean
+    DefaultCookieSerializerCustomizer rawSessionCookie() {
+        return serializer -> serializer.setUseBase64Encoding(false);
+    }
+
+    /**
+     * The back-channel handler closes a session with a server-side POST /logout that carries no
+     * XSRF cookie, so CSRF would reject it (403). That one call is exempt: it must carry Spring's
+     * internal marker AND come from the loopback interface, so a browser (or anyone through the
+     * Ingress, whose source address is never loopback) cannot use it to skip CSRF.
+     */
+    private static boolean isInternalBackChannelLogout(HttpServletRequest request) {
+        if (!"true".equals(request.getParameter("_spring_security_internal_logout"))) {
+            return false;
+        }
+        try {
+            return InetAddress.getByName(request.getRemoteAddr()).isLoopbackAddress();
+        } catch (UnknownHostException e) {
+            return false;
+        }
+    }
+
     /** Application chain (port 8081): everything requires an authenticated session. */
     @Bean
     @Order(2)
     SecurityFilterChain applicationChain(HttpSecurity http,
                                          ClientRegistrationRepository clientRegistrations,
-                                         @Value("${app.frontend-url}") String frontendUrl) {
+                                         OidcSessionRegistry oidcSessionRegistry,
+                                         @Value("${app.frontend-url}") String frontendUrl,
+                                         @Value("${app.backchannel-logout-uri}") String backchannelLogoutUri) {
         var oidcLogout = new OidcClientInitiatedLogoutSuccessHandler(clientRegistrations);
         oidcLogout.setPostLogoutRedirectUri(frontendUrl);
+
+        // On back-channel logout the BFF closes the session by calling its OWN /logout with the session
+        // cookie. By default it calls the host of the incoming request (host.docker.internal, unknown
+        // outside Docker), so the target is fixed. Spring Session's cookie is SESSION, not JSESSIONID.
+        var backChannelLogout = new OidcBackChannelLogoutHandler(oidcSessionRegistry);
+        backChannelLogout.setLogoutUri(backchannelLogoutUri);
+        backChannelLogout.setSessionCookieName("SESSION");
 
         return http
                 .authorizeHttpRequests(auth -> auth.anyRequest().authenticated())
@@ -51,8 +116,13 @@ public class SecurityConfig {
                                 PathPatternRequestMatcher.withDefaults().matcher("/api/**"),
                                 PathPatternRequestMatcher.withDefaults().matcher("/bff/**"))))
                 .logout(logout -> logout.logoutSuccessHandler(oidcLogout))
+                // Keycloak -> POST /logout/connect/oidc/backchannel (signed logout_token, no cookie, no CSRF)
+                .oidcLogout(oidc -> oidc.backChannel(backChannel -> backChannel.logoutHandler(backChannelLogout)))
                 // XSRF-TOKEN cookie readable by the SPA, echoed back in the X-XSRF-TOKEN header
-                .csrf(CsrfConfigurer::spa)
+                .csrf(csrf -> {
+                    csrf.spa();
+                    csrf.ignoringRequestMatchers(SecurityConfig::isInternalBackChannelLogout);
+                })
                 .build();
     }
 }
