@@ -4,6 +4,7 @@ import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.time.Duration;
 
+import com.msj.trading.bff.security.JsonLogoutRedirectStrategy;
 import com.msj.trading.bff.security.RedisOidcSessionRegistry;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.beans.factory.annotation.Value;
@@ -28,6 +29,7 @@ import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.HttpStatusEntryPoint;
 import org.springframework.security.web.servlet.util.matcher.PathPatternRequestMatcher;
 import org.springframework.security.web.util.matcher.OrRequestMatcher;
+import tools.jackson.databind.json.JsonMapper;
 
 @Configuration
 public class SecurityConfig {
@@ -95,9 +97,12 @@ public class SecurityConfig {
                                          ClientRegistrationRepository clientRegistrations,
                                          OidcSessionRegistry oidcSessionRegistry,
                                          @Value("${app.frontend-url}") String frontendUrl,
-                                         @Value("${app.backchannel-logout-uri}") String backchannelLogoutUri) {
+                                         @Value("${app.backchannel-logout-uri}") String backchannelLogoutUri,
+                                         JsonMapper jsonMapper) {
         var oidcLogout = new OidcClientInitiatedLogoutSuccessHandler(clientRegistrations);
         oidcLogout.setPostLogoutRedirectUri(frontendUrl);
+        // the SPA calls POST /logout by XHR: answer 200 {"logoutUrl"} instead of a 302 it cannot follow
+        oidcLogout.setRedirectStrategy(new JsonLogoutRedirectStrategy(jsonMapper));
 
         // On back-channel logout the BFF closes the session by calling its OWN /logout with the session
         // cookie. By default it calls the host of the incoming request (host.docker.internal, unknown
