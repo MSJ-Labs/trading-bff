@@ -18,10 +18,29 @@ class RealmRolesExtractorTest {
     @Test
     void extract_returnsRealmRoles() {
         var claims = new JWTClaimsSet.Builder()
-                .claim("realm_access", Map.of("roles", List.of("trader", "offline_access")))
+                .claim("realm_access", Map.of("roles", List.of("user", "admin")))
                 .build();
 
-        assertThat(RealmRolesExtractor.extract(token(claims))).containsExactly("trader", "offline_access");
+        assertThat(RealmRolesExtractor.extract(token(claims))).containsExactly("user", "admin");
+    }
+
+    @Test
+    void extract_dropsKeycloakBuiltInRoles() {
+        var claims = new JWTClaimsSet.Builder()
+                .claim("realm_access", Map.of("roles",
+                        List.of("default-roles-trading", "offline_access", "uma_authorization", "user")))
+                .build();
+
+        assertThat(RealmRolesExtractor.extract(token(claims))).containsExactly("user");
+    }
+
+    @Test
+    void extract_onlyBuiltInRoles_returnsEmptyList() {
+        var claims = new JWTClaimsSet.Builder()
+                .claim("realm_access", Map.of("roles", List.of("offline_access", "default-roles-trading")))
+                .build();
+
+        assertThat(RealmRolesExtractor.extract(token(claims))).isEmpty();
     }
 
     @Test
