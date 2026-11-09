@@ -6,7 +6,6 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpStatus;
-import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.CsrfConfigurer;
 import org.springframework.security.oauth2.client.oidc.web.logout.OidcClientInitiatedLogoutSuccessHandler;
@@ -14,6 +13,7 @@ import org.springframework.security.oauth2.client.registration.ClientRegistratio
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.HttpStatusEntryPoint;
 import org.springframework.security.web.servlet.util.matcher.PathPatternRequestMatcher;
+import org.springframework.security.web.util.matcher.OrRequestMatcher;
 
 @Configuration
 public class SecurityConfig {
@@ -44,10 +44,12 @@ public class SecurityConfig {
         return http
                 .authorizeHttpRequests(auth -> auth.anyRequest().authenticated())
                 .oauth2Login(login -> login.defaultSuccessUrl(frontendUrl, true))
-                // fetch/XHR to /api/** must get a 401, not a 302 to the Keycloak login page
+                // fetch/XHR to /api/** and /bff/** must get a 401, not a 302 to the Keycloak login page
                 .exceptionHandling(ex -> ex.defaultAuthenticationEntryPointFor(
                         new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED),
-                        PathPatternRequestMatcher.withDefaults().matcher("/api/**")))
+                        new OrRequestMatcher(
+                                PathPatternRequestMatcher.withDefaults().matcher("/api/**"),
+                                PathPatternRequestMatcher.withDefaults().matcher("/bff/**"))))
                 .logout(logout -> logout.logoutSuccessHandler(oidcLogout))
                 // XSRF-TOKEN cookie readable by the SPA, echoed back in the X-XSRF-TOKEN header
                 .csrf(CsrfConfigurer::spa)
