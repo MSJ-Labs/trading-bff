@@ -9,16 +9,26 @@ mvn compile                                              # Compile only
 mvn test                                                 # All tests (Docker needed: Testcontainers Redis)
 mvn test -Dtest=GatewayRateLimitTest                     # Single test class
 mvn spring-boot:run                                      # Run locally (needs BFF_CLIENT_SECRET, see .env.example, and Redis)
+SPRING_PROFILES_ACTIVE=secure-file mvn spring-boot:run   # Same jar, secure-file configuration (needs the secure-file client secret)
 ```
 
-Ports: **8081** public (browser and API), **9091** management (actuator, never routed by an Ingress/Service).
+Ports: **8081** public (browser and API), **9091** management (actuator, never routed by an Ingress/Service). Profile `secure-file`: **8083** and **9093**.
+
+## One jar, one configuration per front
+
+The code knows no front: what differs between the trading and the secure-file interface is configuration. Default (no profile) = trading: realm `trading`, client `trading-bff`, routes to trading-core, Redis DB 1. Profile `secure-file` (`application-secure-file.properties`) = realm `secure-file`, client `secure-file-bff`, routes to secure-file-service (`SECURE_FILE_URI`, default `http://localhost:8082`), Redis DB 2, port 8083. Run each one as its own deployment.
+
+- A list replaces the one of `application.properties` as a whole (Spring does not merge lists): the profile declares its own `routes[]`, the trading-core routes do not exist there. `SecureFileProfileTest` asserts it.
+- `/api/v1/files` (PUT) and `/api/v1/files/*/content` (GET) carry files up to 2 GB: no CircuitBreaker (its 10s time limiter would cut them) and no Retry. Not yet tried with a real large file: check that the body is streamed, not buffered.
+- One stack at a time on a machine: both name their session cookie `SESSION` (fixed in `SecurityConfig` for the back-channel logout) and browsers share cookies between ports of a host; only one Keycloak can use 8180 anyway.
+- A front that needs code of its own (SSE, presigned upload, per-role rules) is the moment to extract the shared engine into a starter, not to put front-specific code here.
 
 ## What the BFF is
 
 Backend-for-frontend and API gateway in one Spring Boot app (Spring Boot 4.1, Java 25, Spring Cloud 2025.1 Gateway Server **MVC**, not WebFlux):
 
 - **Confidential OAuth2 client** `trading-bff` (Authorization Code + PKCE) against Keycloak. Tokens stay server-side; the browser only holds an httpOnly session cookie. Sessions live in **Redis DB 1** (Spring Session). Back-channel logout closes sessions (`RedisOidcSessionRegistry`).
-- **Gateway**: `/api/**` is proxied to trading-core with the access token attached by `TokenRelay`.
+- **Gateway**: `/api/**` is proxied to trading-core with the access token attached by `TokenRelay` (profile `secure-file`: `/api/v1/**` to secure-file-service).
 - `GET /bff/user`: identity of the logged-in user (sub, names, email, realm roles for display only).
 
 ## Request path through the gateway (hot path, latency matters)
@@ -106,4 +116,4 @@ com.msj.trading.bff/
 
 ## Roadmap (gateway features)
 
-Done: resilience (timeout, retry, circuit breaker), rate limiting. Next: observability (correlation id + OpenTelemetry propagation to downstream services), SSE/WebSocket proxying replacing the unauthenticated `/ws` of trading-core, security headers and explicit CORS decision, second route for `secure-file-service` (audience mapper per service), per-role authorization at the edge, request logging. Edge: Traefik first (Layer 10), then the GCP ingress.
+Done: resilience (timeout, retry, circuit breaker), rate limiting, routes for `secure-file-service` (profile `secure-file`). Next: observability (correlation id + OpenTelemetry propagation to downstream services), SSE/WebSocket proxying replacing the unauthenticated `/ws` of trading-core, security headers and explicit CORS decision, per-role authorization at the edge, request logging. Edge: Traefik first (Layer 10), then the GCP ingress.
