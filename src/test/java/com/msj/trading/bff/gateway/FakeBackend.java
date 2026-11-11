@@ -48,6 +48,7 @@ final class FakeBackend implements AutoCloseable {
     private final Map<String, Queue<Behavior>> scripts = new ConcurrentHashMap<>();
     private final Map<String, Behavior> defaults = new ConcurrentHashMap<>();
     private final Map<String, AtomicInteger> counters = new ConcurrentHashMap<>();
+    private final Map<String, com.sun.net.httpserver.Headers> lastHeaders = new ConcurrentHashMap<>();
 
     FakeBackend() {
         try {
@@ -97,11 +98,17 @@ final class FakeBackend implements AutoCloseable {
         return counter == null ? 0 : counter.get();
     }
 
+    /** Headers of the last request received for this method and path (null when none), as the backend saw them. */
+    com.sun.net.httpserver.Headers lastHeaders(String method, String path) {
+        return lastHeaders.get(key(method, path));
+    }
+
     /** Forgets scripts and counters: call between tests when the backend is shared. */
     void reset() {
         scripts.clear();
         defaults.clear();
         counters.clear();
+        lastHeaders.clear();
     }
 
     @Override
@@ -112,6 +119,7 @@ final class FakeBackend implements AutoCloseable {
     private void handle(HttpExchange exchange) throws IOException {
         String path = exchange.getRequestURI().getPath();
         countRequest(exchange.getRequestMethod(), path);
+        lastHeaders.put(key(exchange.getRequestMethod(), path), exchange.getRequestHeaders());
         exchange.getRequestBody().readAllBytes();
         apply(nextBehavior(path), exchange);
     }

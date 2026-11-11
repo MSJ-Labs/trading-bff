@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -87,6 +88,37 @@ class SecureFileProfileTest {
                 .andExpect(forwardedUrl(null));
 
         assertThat(BACKEND.requests("PUT", "/api/v1/files")).isEqualTo(1);
+    }
+
+    @Test
+    void upload_withAFormContentType_isNotParsedAsAForm() throws Exception {
+        // Axios sends a PUT with application/x-www-form-urlencoded unless told otherwise: the bytes of the file
+        // must reach the service untouched, not be decoded (and held in memory) as a form.
+        BACKEND.thenAlways("/api/v1/files", FakeBackend.respond(200));
+
+        mockMvc.perform(authenticated(put("/api/v1/files").with(csrf()).param("name", "a.bin")
+                        .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                        .content(new byte[] {'%', 'Z', 0, (byte) 0xff})))
+                .andExpect(status().isOk());
+
+        assertThat(BACKEND.requests("PUT", "/api/v1/files")).isEqualTo(1);
+    }
+
+    @Test
+    void upload_reachesTheServiceWithItsContentLength() throws Exception {
+        // The service refuses a body of unknown length (411): the BFF must not turn the upload into a chunked one.
+        BACKEND.thenAlways("/api/v1/files", FakeBackend.respond(200));
+        byte[] body = new byte[100_000];
+
+        mockMvc.perform(authenticated(put("/api/v1/files").with(csrf()).param("name", "a.bin")
+                        .contentType(MediaType.APPLICATION_OCTET_STREAM)
+                        .header("Content-Length", body.length)
+                        .content(body)))
+                .andExpect(status().isOk());
+
+        var received = BACKEND.lastHeaders("PUT", "/api/v1/files");
+        assertThat(received.getFirst("Content-Length")).isEqualTo(String.valueOf(body.length));
+        assertThat(received.getFirst("Transfer-Encoding")).isNull();
     }
 
     @Test
