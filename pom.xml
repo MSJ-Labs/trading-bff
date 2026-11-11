@@ -90,6 +90,12 @@
             <artifactId>spring-boot-starter-security-test</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- MockMvc for the gateway resilience test (full context, authenticated requests) -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webmvc-test</artifactId>
+            <scope>test</scope>
+        </dependency>
         <!-- Real Redis in Docker for RedisOidcSessionRegistryTest (version managed by Boot's BOM) -->
         <dependency>
             <groupId>org.testcontainers</groupId>
